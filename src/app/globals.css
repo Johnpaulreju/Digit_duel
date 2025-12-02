@@ -1,0 +1,7 @@
+/* Pull in Tailwind v4 */
+@import "tailwindcss";
+
+/* Optional: a tiny global touch */
+body {
+  @apply bg-slate-950 text-slate-50;
+}
