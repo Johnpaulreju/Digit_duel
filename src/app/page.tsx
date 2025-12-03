@@ -23,18 +23,18 @@ function HomePageContent() {
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4 py-8">
-      <div className="mx-auto w-full max-w-3xl rounded-3xl border border-slate-800 bg-slate-900/85 p-10 shadow-2xl backdrop-blur">
-        <h1 className="mb-2 text-center text-3xl font-extrabold tracking-tight text-slate-50">
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4 py-6 sm:py-8">
+      <div className="mx-auto w-full max-w-xl rounded-3xl border border-slate-800 bg-slate-900/85 px-6 py-8 shadow-2xl backdrop-blur sm:max-w-3xl sm:px-10 sm:py-10">
+        <h1 className="mb-2 text-center text-3xl font-extrabold tracking-tight text-slate-50 sm:text-4xl">
           Digit Duel
         </h1>
         <p className="mb-8 text-center text-sm text-slate-400">
           Two players. One secret 4‑digit code each. First to guess the other wins.
         </p>
 
-        <div className="space-y-4">
+        <div className="space-y-3 sm:space-y-4">
           <button
-            className="w-full rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white
+            className="w-full rounded-xl bg-indigo-500 px-4 py-3 text-base font-semibold text-white
                        shadow-lg shadow-indigo-500/30 transition hover:bg-indigo-400"
             onClick={() => {
               setPrefilledRoomId(undefined);
@@ -45,7 +45,7 @@ function HomePageContent() {
           </button>
 
           <button
-            className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm
+            className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-base
                        font-semibold text-slate-100 transition hover:border-indigo-400 hover:bg-slate-800"
             onClick={() => {
               setPrefilledRoomId(undefined);
@@ -56,7 +56,7 @@ function HomePageContent() {
           </button>
         </div>
 
-        <p className="mt-6 text-center text-xs text-slate-500">
+        <p className="mt-6 text-center text-xs text-slate-500 sm:text-sm">
           Share your room ID with a friend, pick your avatar, choose a secret number,
           and race to crack each other&apos;s code.
         </p>

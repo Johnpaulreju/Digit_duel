@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createRoom } from '@/lib/gameStore';
 
+const ALLOWED_DIGIT_COUNTS = [4, 5, 6];
+
 export async function POST(req: NextRequest) {
   try {
-    const { name, avatar } = await req.json();
+    const { name, avatar, digitCount } = await req.json();
 
     if (!name || !avatar) {
       return NextResponse.json(
@@ -12,7 +14,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { room, player } = await createRoom(name.trim(), avatar);
+    const parsedDigits = Number(digitCount);
+    const safeDigits = ALLOWED_DIGIT_COUNTS.includes(parsedDigits) ? parsedDigits : 4;
+
+    const { room, player } = await createRoom(name.trim(), avatar, safeDigits);
 
     return NextResponse.json({
       roomId: room.id,

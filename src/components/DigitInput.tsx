@@ -6,9 +6,10 @@ interface DigitInputProps {
   value: string[];
   onChange: (value: string[]) => void;
   disabled?: boolean;
+  className?: string;
 }
 
-export default function DigitInput({ value, onChange, disabled }: DigitInputProps) {
+export default function DigitInput({ value, onChange, disabled, className }: DigitInputProps) {
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
 
   const handleChange = (index: number, raw: string) => {
@@ -33,7 +34,7 @@ export default function DigitInput({ value, onChange, disabled }: DigitInputProp
   };
 
   return (
-    <div className="flex justify-center gap-3">
+    <div className={`flex justify-center gap-2 sm:gap-3 ${className ?? ''}`}>
       {value.map((digit, idx) => (
         <input
           key={idx}
@@ -47,7 +48,8 @@ export default function DigitInput({ value, onChange, disabled }: DigitInputProp
           value={digit}
           onChange={(e) => handleChange(idx, e.target.value)}
           onKeyDown={(e) => handleKeyDown(idx, e)}
-          className="h-12 w-12 rounded-xl border border-slate-600 bg-slate-900 text-center text-xl font-semibold text-slate-100
+          className="h-12 w-10 rounded-xl border border-slate-600 bg-slate-900 text-center text-xl font-semibold text-slate-100
+                     sm:w-12
                      outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/60 disabled:opacity-50"
         />
       ))}

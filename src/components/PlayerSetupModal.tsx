@@ -17,6 +17,7 @@ export default function PlayerSetupModal({ mode, open, onClose, initialRoomId }:
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('🤖');
   const [roomId, setRoomId] = useState(initialRoomId ?? '');
+  const [digitCount, setDigitCount] = useState(4);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -27,6 +28,12 @@ export default function PlayerSetupModal({ mode, open, onClose, initialRoomId }:
       setRoomId(initialRoomId);
     }
   }, [initialRoomId, open]);
+
+  useEffect(() => {
+    if (!isHost) {
+      setDigitCount(4);
+    }
+  }, [isHost]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,9 +53,10 @@ export default function PlayerSetupModal({ mode, open, onClose, initialRoomId }:
       setLoading(true);
 
       const endpoint = isHost ? '/api/rooms' : '/api/rooms/join';
-      const body: Record<string, string> = { name: name.trim(), avatar };
+      const body: Record<string, string | number> = { name: name.trim(), avatar };
 
       if (!isHost) body.roomId = roomId.trim();
+      if (isHost) body.digitCount = digitCount;
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -104,6 +112,33 @@ export default function PlayerSetupModal({ mode, open, onClose, initialRoomId }:
           </label>
           <AvatarPicker value={avatar} onChange={setAvatar} />
         </div>
+
+        {isHost && (
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-slate-200">
+              Digits
+            </label>
+            <div className="flex gap-2">
+              {[4, 5, 6].map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  onClick={() => setDigitCount(count)}
+                  className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                    digitCount === count
+                      ? 'border-indigo-400 bg-indigo-500/20 text-indigo-100'
+                      : 'border-slate-600 bg-slate-900 text-slate-200 hover:border-indigo-400'
+                  }`}
+                >
+                  {count} digits
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-slate-500">
+              Both players create and guess {digitCount} digits.
+            </p>
+          </div>
+        )}
 
         {!isHost && (
           <div className="space-y-2">
