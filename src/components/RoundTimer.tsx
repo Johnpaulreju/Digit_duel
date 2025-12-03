@@ -3,22 +3,42 @@
 import React, { useEffect, useState } from 'react';
 
 interface RoundTimerProps {
-  seed: number; // change this to restart timer
+  seed: number;
   duration?: number;
+  onExpire?: () => void;
+  onWarningTick?: (remaining: number) => void;
 }
 
-export default function RoundTimer({ seed, duration = 15 }: RoundTimerProps) {
+export default function RoundTimer({
+  seed,
+  duration = 30,
+  onExpire,
+  onWarningTick,
+}: RoundTimerProps) {
   const [remaining, setRemaining] = useState(duration);
 
   useEffect(() => {
-    let active = true;
+    let cancelled = false;
+    let warnedAt: number | null = null;
+    let expired = false;
     const start = Date.now();
+    setRemaining(duration);
 
     const update = () => {
       const elapsed = Math.floor((Date.now() - start) / 1000);
-      const left = duration - elapsed;
-      if (active) {
-        setRemaining(left > 0 ? left : 0);
+      const left = Math.max(duration - elapsed, 0);
+      if (!cancelled) {
+        setRemaining(left);
+
+        if (left <= 5 && left > 0 && warnedAt !== left) {
+          warnedAt = left;
+          onWarningTick?.(left);
+        }
+
+        if (left === 0 && !expired) {
+          expired = true;
+          onExpire?.();
+        }
       }
     };
 
@@ -26,10 +46,10 @@ export default function RoundTimer({ seed, duration = 15 }: RoundTimerProps) {
     const interval = setInterval(update, 250);
 
     return () => {
-      active = false;
+      cancelled = true;
       clearInterval(interval);
     };
-  }, [seed, duration]);
+  }, [seed, duration, onExpire, onWarningTick]);
 
   return (
     <div className="flex flex-col items-center gap-3 text-slate-100 sm:flex-row sm:justify-between">

@@ -1,7 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendReaction, serializeRoomForPlayer } from '@/lib/gameStore';
 
-const ALLOWED_EMOJIS = ['😂', '😱', '🤔', '😎'];
+const ALLOWED_EMOJIS = [
+  '😂',
+  '🤣',
+  '😱',
+  '😎',
+  '🤔',
+  '😜',
+  '🥳',
+  '😈',
+  '🌹',
+  '😍',
+  '😘',
+  '❤️',
+  '🤩',
+  '😭',
+  '😇',
+];
 
 const responseError = (message: string, status = 400) =>
   NextResponse.json({ error: message }, { status });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { DigitFeedback } from '@/lib/gameTypes';
 import DigitInput from '@/components/DigitInput';
@@ -10,7 +10,23 @@ import AvatarPicker from '@/components/AvatarPicker';
 import confetti from 'canvas-confetti';
 import useSound from 'use-sound';
 
-const REACTION_EMOJIS = ['😂', '😱', '🤔', '😎', '🌹', '😍', '🤣', '🥳', '😈'];
+const REACTION_EMOJIS = [
+  '😂',
+  '🤣',
+  '😱',
+  '😎',
+  '🤔',
+  '😜',
+  '🥳',
+  '😈',
+  '🌹',
+  '😍',
+  '😘',
+  '❤️',
+  '🤩',
+  '😭',
+  '😇',
+];
 
 interface Guess {
   value: string;
@@ -63,7 +79,7 @@ export default function RoomClient({
   const [playClick] = useSound('/sounds/click.mp3', { volume: 0.5 });
   const [playWin] = useSound('/sounds/win.mp3', { volume: 0.6 });
   const [playLose] = useSound('/sounds/lose.mp3', { volume: 0.5 });
-  const [playPop] = useSound('/sounds/click.mp3', { volume: 0.3, playbackRate: 1.8 });
+  const [playTick, { stop: stopTick }] = useSound('/sounds/tick.wav', { volume: 0.5 });
 
   const [playerId, setPlayerId] = useState(initialPlayerId ?? '');
   const [state, setState] = useState<RoomState | null>(null);
@@ -84,6 +100,12 @@ export default function RoomClient({
   const [visibleReaction, setVisibleReaction] = useState<string | null>(null);
   const hasStateRef = useRef(false);
   const reactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const winSoundPlayed = useRef(false);
+  const loseSoundPlayed = useRef(false);
+  const prevMyGuessRef = useRef(0);
+  const prevOppGuessRef = useRef(0);
+  const [timerExpired, setTimerExpired] = useState(false);
+  const [autoHomeCountdown, setAutoHomeCountdown] = useState<number | null>(null);
 
   const digitCount = clampDigits(state?.digitCount ?? 4);
 
@@ -95,6 +117,27 @@ export default function RoomClient({
     setSecretDigits((prev) => (prev.length === digitCount ? prev : buildEmptyDigits(digitCount)));
     setGuessDigits((prev) => (prev.length === digitCount ? prev : buildEmptyDigits(digitCount)));
   }, [digitCount]);
+
+  useEffect(() => {
+    if (!state) return;
+    const myCount = state.you.guesses.length;
+    if (myCount !== prevMyGuessRef.current) {
+      prevMyGuessRef.current = myCount;
+      setTimerExpired(false);
+    }
+    const oppCount = state.opponent?.guesses.length ?? 0;
+    if (oppCount !== prevOppGuessRef.current) {
+      prevOppGuessRef.current = oppCount;
+      setTimerExpired(false);
+      setGuessDigits(buildEmptyDigits(digitCount));
+    }
+  }, [state, digitCount]);
+
+  useEffect(() => {
+    if (state?.status !== 'inProgress' && timerExpired) {
+      setTimerExpired(false);
+    }
+  }, [state?.status, timerExpired]);
 
   useEffect(() => {
     if (!playerId) {
@@ -158,10 +201,15 @@ export default function RoomClient({
   const myId = state?.you.id ?? null;
 
   useEffect(() => {
-    if (!state || state.status !== 'finished') return;
+    if (!state || state.status !== 'finished') {
+      winSoundPlayed.current = false;
+      loseSoundPlayed.current = false;
+      return;
+    }
 
-    if (winnerId && myId && winnerId === myId) {
+    if (winnerId && myId && winnerId === myId && !winSoundPlayed.current) {
       playWin();
+      winSoundPlayed.current = true;
       const duration = 3000;
       const end = Date.now() + duration;
 
@@ -185,24 +233,24 @@ export default function RoomClient({
           requestAnimationFrame(frame);
         }
       })();
-    } else if (winnerId && myId && winnerId !== myId) {
+    } else if (winnerId && myId && winnerId !== myId && !loseSoundPlayed.current) {
       playLose();
+      loseSoundPlayed.current = true;
     }
-  }, [state, winnerId, myId, playWin, playLose]);
+  }, [state?.status, winnerId, myId, playWin, playLose]);
 
   useEffect(() => {
     if (!state?.lastReaction || !playerId) return;
     if (state.lastReaction.playerId === playerId) return;
 
     setVisibleReaction(state.lastReaction.emoji);
-    playPop();
     if (reactionTimeoutRef.current) {
       clearTimeout(reactionTimeoutRef.current);
     }
     reactionTimeoutRef.current = setTimeout(() => {
       setVisibleReaction(null);
     }, 2000);
-  }, [state?.lastReaction, playerId, playPop]);
+  }, [state?.lastReaction, playerId]);
 
   useEffect(() => {
     return () => {
@@ -211,6 +259,42 @@ export default function RoomClient({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (state?.status === 'finished') {
+      setAutoHomeCountdown(15);
+    } else {
+      setAutoHomeCountdown(null);
+    }
+  }, [state?.status]);
+
+  useEffect(() => {
+    if (autoHomeCountdown === null) return;
+    if (autoHomeCountdown <= 0) {
+      router.push('/');
+      return;
+    }
+    const timeout = setTimeout(
+      () => setAutoHomeCountdown((prev) => (prev ?? 1) - 1),
+      1000
+    );
+    return () => clearTimeout(timeout);
+  }, [autoHomeCountdown, router]);
+
+  const handleTimerWarning = useCallback(
+    (remaining: number) => {
+      if (remaining <= 5 && remaining >= 1) {
+        stopTick?.();
+        playTick();
+      }
+    },
+    [playTick, stopTick]
+  );
+
+  const handleTimerExpire = useCallback(() => {
+    stopTick?.();
+    setTimerExpired(true);
+  }, [stopTick]);
 
   const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -282,6 +366,9 @@ export default function RoomClient({
   };
 
   const handleSubmitGuess = async () => {
+    if (timerExpired) {
+      return;
+    }
     playClick();
     if (!state || state.status !== 'inProgress') return;
 
@@ -340,6 +427,7 @@ export default function RoomClient({
       setState(data);
       setSecretDigits(buildEmptyDigits(clampDigits(data.digitCount ?? digitCount)));
       setGuessDigits(buildEmptyDigits(clampDigits(data.digitCount ?? digitCount)));
+      setTimerExpired(false);
       setRematchMessage('New round starting!');
     } catch (err: unknown) {
       setRematchMessage(err instanceof Error ? err.message : 'Failed to reset room');
@@ -351,7 +439,6 @@ export default function RoomClient({
 
   const handleReaction = async (emoji: string) => {
     if (!playerId) return;
-    playClick();
     try {
       setReactionMessage(null);
       const res = await fetch(`/api/rooms/${roomId}/react`, {
@@ -445,7 +532,8 @@ export default function RoomClient({
   const gameFinished = status === 'finished';
   const youWon = gameFinished && state.winnerId === you.id;
   const youLost = gameFinished && state.winnerId && state.winnerId !== you.id;
-  const timerSeed = you.guesses.length + (status === 'inProgress' ? 1 : 0);
+  const opponentGuessCount = opponent?.guesses.length ?? 0;
+  const timerSeed = you.guesses.length + opponentGuessCount + (status === 'inProgress' ? 1 : 0);
 
   const statusMessage = (() => {
     if (status === 'waitingForPlayers') return 'Share the Room Code above to invite a friend!';
@@ -460,7 +548,14 @@ export default function RoomClient({
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-3 sm:p-4">
-      <div className="w-full max-w-xl rounded-3xl border border-slate-800 bg-slate-900/90 px-5 py-6 shadow-2xl backdrop-blur sm:max-w-2xl lg:max-w-4xl sm:px-6">
+      <div className="relative w-full max-w-xl rounded-3xl border border-slate-800 bg-slate-900/90 px-5 py-6 shadow-2xl backdrop-blur sm:max-w-2xl lg:max-w-4xl sm:px-6">
+        {visibleReaction && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+            <span className="animate-float text-6xl drop-shadow-[0_10px_25px_rgba(0,0,0,0.7)] sm:text-7xl">
+              {visibleReaction}
+            </span>
+          </div>
+        )}
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">Room Code</p>
@@ -495,14 +590,9 @@ export default function RoomClient({
               <span className="font-bold text-indigo-100">{you.name} (You)</span>
             </div>
             {opponent ? (
-              <div className="relative flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/50 pl-2 pr-3 py-1">
+              <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/50 pl-2 pr-3 py-1">
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/20 text-sm">{opponent.avatar}</span>
                 <span className="font-bold text-rose-100">{opponent.name}</span>
-                {visibleReaction && (
-                  <span className="pointer-events-none absolute -top-10 right-0 text-5xl drop-shadow-[0_4px_12px_rgba(0,0,0,0.7)] animate-float">
-                    {visibleReaction}
-                  </span>
-                )}
               </div>
             ) : (
               <div className="flex items-center gap-2 text-slate-500">
@@ -570,7 +660,12 @@ export default function RoomClient({
         {status === 'inProgress' && (
           <div className="space-y-6">
             <div className="flex flex-col items-center gap-2 px-1 text-center text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:text-left">
-              <RoundTimer seed={timerSeed} />
+              <RoundTimer
+                seed={timerSeed}
+                duration={30}
+                onWarningTick={handleTimerWarning}
+                onExpire={handleTimerExpire}
+              />
               <span>TURN {you.guesses.length + 1}</span>
             </div>
 
@@ -585,16 +680,26 @@ export default function RoomClient({
               )}
             </div>
 
-            <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+            <div className="relative rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+              {timerExpired && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-slate-950/70 px-4 text-center text-sm text-slate-100 backdrop-blur-sm">
+                  <p>Input locked</p>
+                  <p className="text-xs text-slate-300">
+                    Your next guess will be available when your opponent submits.
+                  </p>
+                </div>
+              )}
               <p className="mb-3 text-center text-xs font-bold uppercase tracking-wider text-indigo-300">Enter Guess</p>
               <DigitInput
                 value={guessDigits}
                 onChange={setGuessDigits}
-                className={shakeGuess ? 'animate-shake' : ''}
+                disabled={timerExpired}
+                className={`${shakeGuess ? 'animate-shake' : ''} ${timerExpired ? 'opacity-60' : ''}`.trim()}
               />
               <button
                 onClick={handleSubmitGuess}
-                className="mt-4 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500"
+                disabled={timerExpired}
+                className="mt-4 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Submit Guess
               </button>
@@ -653,6 +758,11 @@ export default function RoomClient({
               </button>
             </div>
             {rematchMessage && <p className="text-center text-xs text-slate-400">{rematchMessage}</p>}
+            {autoHomeCountdown !== null && (
+              <p className="text-center text-xs text-slate-400">
+                Returning home in {autoHomeCountdown}s…
+              </p>
+            )}
           </div>
         )}
       </div>
