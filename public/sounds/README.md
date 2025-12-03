@@ -1,9 +1,9 @@
 # Sound Assets
 
-Place the following audio files in this folder to enable sound effects:
+These files power the in-game sound effects. Replace them with your own clips if desired.
 
-- click.mp3
-- win.mp3
-- lose.mp3
+- `click.mp3` – button presses / interactions
+- `win.mp3` – victory celebration
+- `lose.mp3` – defeat cue
 
-They can be any short MP3 clips (click/pop, victory, defeat). The game references these paths via the `use-sound` hooks in `RoomClient.tsx`.
+Keep the filenames the same so the `use-sound` hooks in `RoomClient.tsx` can locate them.

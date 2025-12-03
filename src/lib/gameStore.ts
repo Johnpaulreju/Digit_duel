@@ -1,52 +1,19 @@
 import { Redis } from '@upstash/redis';
 import { DigitFeedback, Guess, Player, Room, RoomStatus } from './gameTypes';
 
-const ROOM_TTL_SECONDS = 60 * 60; // 1 hour
-const ROOM_KEY_PREFIX = 'room:';
-
-const hasRedisCredentials =
-  typeof process !== 'undefined' &&
-  Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
-
-const redis = hasRedisCredentials
-  ? new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL!,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-    })
-  : null;
-
-// Local fallback so devs without env vars can still play
-const memoryRooms = new Map<string, Room>();
-
-function roomKey(roomId: string) {
-  return `${ROOM_KEY_PREFIX}${roomId}`;
-}
+const redis = Redis.fromEnv();
 
 function generateRoomId(): string {
   return Math.floor(10000 + Math.random() * 90000).toString();
 }
 
 function generatePlayerId(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
+  const cryptoGlobal =
+    typeof globalThis !== 'undefined' ? (globalThis.crypto as Crypto | undefined) : undefined;
+  if (cryptoGlobal?.randomUUID) {
+    return cryptoGlobal.randomUUID();
   }
   return Math.random().toString(36).slice(2);
-}
-
-async function saveRoom(room: Room) {
-  if (redis) {
-    await redis.set(roomKey(room.id), room, { ex: ROOM_TTL_SECONDS });
-  } else {
-    memoryRooms.set(room.id, room);
-  }
-}
-
-async function loadRoom(roomId: string): Promise<Room | null> {
-  if (redis) {
-    const room = await redis.get<Room>(roomKey(roomId));
-    return room ?? null;
-  }
-  return memoryRooms.get(roomId) ?? null;
 }
 
 export function evaluateGuess(secret: string, guess: string): DigitFeedback[] {
@@ -83,18 +50,20 @@ export function evaluateGuess(secret: string, guess: string): DigitFeedback[] {
 
 export async function createRoom(name: string, avatar: string): Promise<{ room: Room; player: Player }> {
   let roomId = generateRoomId();
-  while (await loadRoom(roomId)) {
+  let attempts = 0;
+
+  while ((await redis.exists(`room:${roomId}`)) > 0 && attempts < 5) {
     roomId = generateRoomId();
+    attempts++;
   }
 
-  const player: Player = {
-    id: generatePlayerId(),
-    name,
-    avatar,
-    ready: false,
-    guesses: [],
-  };
+  if (attempts >= 5) {
+    throw new Error('Server busy, please try again.');
+  }
 
+  const playerId = generatePlayerId();
+
+  const player: Player = { id: playerId, name, avatar, ready: false, guesses: [] };
   const room: Room = {
     id: roomId,
     players: [player],
@@ -102,7 +71,7 @@ export async function createRoom(name: string, avatar: string): Promise<{ room: 
     createdAt: Date.now(),
   };
 
-  await saveRoom(room);
+  await redis.set(`room:${roomId}`, room, { ex: 3600 });
   return { room, player };
 }
 
@@ -111,59 +80,40 @@ export async function joinRoom(
   name: string,
   avatar: string
 ): Promise<{ room: Room; player: Player }> {
-  const room = await loadRoom(roomId);
+  const room = await redis.get<Room>(`room:${roomId}`);
+  if (!room) throw new Error('Room not found');
+  if (room.players.length >= 2) throw new Error('Room is full');
 
-  if (!room) {
-    throw new Error('Room not found');
-  }
-
-  if (room.players.length >= 2) {
-    throw new Error('Room is full');
-  }
-
-  const player: Player = {
-    id: generatePlayerId(),
-    name,
-    avatar,
-    ready: false,
-    guesses: [],
-  };
+  const playerId = generatePlayerId();
+  const player: Player = { id: playerId, name, avatar, ready: false, guesses: [] };
 
   room.players.push(player);
+  if (room.status === 'waitingForPlayers') room.status = 'settingSecret';
 
-  if (room.status === 'waitingForPlayers') {
-    room.status = 'settingSecret';
-  }
-
-  await saveRoom(room);
+  await redis.set(`room:${roomId}`, room, { ex: 3600 });
   return { room, player };
 }
 
 export async function getRoom(roomId: string): Promise<Room | null> {
-  return loadRoom(roomId);
+  return (await redis.get<Room>(`room:${roomId}`)) ?? null;
 }
 
 export async function setSecret(roomId: string, playerId: string, secret: string): Promise<Room> {
-  const room = await loadRoom(roomId);
+  const room = await redis.get<Room>(`room:${roomId}`);
   if (!room) throw new Error('Room not found');
-
-  if (!/^[0-9]{4}$/.test(secret)) {
-    throw new Error('Secret must be a 4 digit number');
-  }
+  if (!/^\d{4}$/.test(secret)) throw new Error('Secret must be 4 digits');
 
   const player = room.players.find((p) => p.id === playerId);
-  if (!player) throw new Error('Player not found in room');
+  if (!player) throw new Error('Player not found');
 
   player.secret = secret;
   player.ready = true;
 
   if (room.players.length === 2 && room.players.every((p) => p.ready && p.secret)) {
     room.status = 'inProgress';
-  } else {
-    room.status = 'settingSecret';
   }
 
-  await saveRoom(room);
+  await redis.set(`room:${roomId}`, room, { ex: 3600 });
   return room;
 }
 
@@ -172,49 +122,32 @@ export async function makeGuess(
   playerId: string,
   guess: string
 ): Promise<{ room: Room; result: Guess; isWin: boolean }> {
-  const room = await loadRoom(roomId);
+  const room = await redis.get<Room>(`room:${roomId}`);
   if (!room) throw new Error('Room not found');
-
-  if (room.status !== 'inProgress') {
-    throw new Error('Game not in progress');
-  }
-
-  if (!/^[0-9]{4}$/.test(guess)) {
-    throw new Error('Guess must be a 4 digit number');
-  }
+  if (room.status !== 'inProgress') throw new Error('Game not in progress');
+  if (!/^\d{4}$/.test(guess)) throw new Error('Guess must be 4 digits');
 
   const player = room.players.find((p) => p.id === playerId);
   const opponent = room.players.find((p) => p.id !== playerId);
-
-  if (!player || !opponent) {
-    throw new Error('Both players are required');
-  }
-
-  if (!opponent.secret) {
-    throw new Error('Opponent has not set a secret yet');
-  }
+  if (!player || !opponent?.secret) throw new Error('Invalid game state');
 
   const feedback = evaluateGuess(opponent.secret, guess);
-  const createdAt = Date.now();
-
+  const guessObj: Guess = { value: guess, feedback, createdAt: Date.now() };
   const isWin = guess === opponent.secret;
-  const guessObj: Guess = { value: guess, feedback, createdAt };
 
   player.guesses.push(guessObj);
-
   if (isWin) {
     room.status = 'finished';
     room.winnerId = player.id;
   }
 
-  await saveRoom(room);
+  await redis.set(`room:${roomId}`, room, { ex: 3600 });
   return { room, result: guessObj, isWin };
 }
 
 export function serializeRoomForPlayer(room: Room, playerId: string) {
   const you = room.players.find((p) => p.id === playerId);
   if (!you) throw new Error('You are not in this room');
-
   const opponent = room.players.find((p) => p.id !== playerId) || null;
   const opponentSecret =
     room.status === 'finished' && opponent && opponent.secret ? opponent.secret : null;

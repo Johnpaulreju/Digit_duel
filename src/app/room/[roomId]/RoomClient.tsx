@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { DigitFeedback } from '@/lib/gameTypes';
 import DigitInput from '@/components/DigitInput';
@@ -24,16 +24,13 @@ interface PublicPlayer {
   guesses: Guess[];
 }
 
-type RoomStatus =
-  | 'waitingForPlayers'
-  | 'settingSecret'
-  | 'inProgress'
-  | 'finished';
+type RoomStatus = 'waitingForPlayers' | 'settingSecret' | 'inProgress' | 'finished';
 
 interface RoomState {
   roomId: string;
   status: RoomStatus;
   winnerId: string | null;
+  opponentSecret?: string | null;
   you: PublicPlayer;
   opponent: PublicPlayer | null;
 }
@@ -46,25 +43,27 @@ export default function RoomClient({
   initialPlayerId?: string;
 }) {
   const router = useRouter();
-  const [soundsReady, setSoundsReady] = useState(false);
-  useEffect(() => {
-    setSoundsReady(true);
-  }, []);
-  const [playClick] = useSound('/sounds/click.wav', { volume: 0.5, soundEnabled: soundsReady });
-  const [playWin] = useSound('/sounds/won.wav', { volume: 0.6, soundEnabled: soundsReady });
-  const [playLose] = useSound('/sounds/loss.mp3', { volume: 0.5, soundEnabled: soundsReady });
+  const [playClick] = useSound('/sounds/click.mp3', { volume: 0.5 });
+  const [playWin] = useSound('/sounds/win.mp3', { volume: 0.6 });
+  const [playLose] = useSound('/sounds/lose.mp3', { volume: 0.5 });
+
   const [playerId, setPlayerId] = useState(initialPlayerId ?? '');
   const [state, setState] = useState<RoomState | null>(null);
   const [loading, setLoading] = useState(!!initialPlayerId);
   const [error, setError] = useState<string | null>(null);
 
-  const [secretDigits, setSecretDigits] = useState<string[]>(['', '', '', '']);
-  const [guessDigits, setGuessDigits] = useState<string[]>(['', '', '', '']);
+  const [secretDigits, setSecretDigits] = useState(['', '', '', '']);
+  const [guessDigits, setGuessDigits] = useState(['', '', '', '']);
   const [copied, setCopied] = useState(false);
 
   const [joinName, setJoinName] = useState('');
   const [joinAvatar, setJoinAvatar] = useState('🤖');
   const [isJoining, setIsJoining] = useState(false);
+  const hasStateRef = useRef(false);
+
+  useEffect(() => {
+    hasStateRef.current = Boolean(state);
+  }, [state]);
 
   useEffect(() => {
     if (!playerId) {
@@ -81,10 +80,18 @@ export default function RoomClient({
           { cache: 'no-store' }
         );
 
-        const data = await res.json();
+        if (res.status === 404) {
+          if (!cancelled) {
+            setState(null);
+            setError('This room does not exist anymore or has expired.');
+            setLoading(false);
+          }
+          clearInterval(intervalId);
+          return;
+        }
 
+        const data = await res.json();
         if (!res.ok) {
-          if (res.status === 404) throw new Error('Room not found or expired');
           throw new Error(data?.error ?? 'Failed to load game state');
         }
 
@@ -94,21 +101,58 @@ export default function RoomClient({
         }
       } catch (err: unknown) {
         if (!cancelled) {
-          const message = err instanceof Error ? err.message : 'Failed to load game';
-          if (!state) setError(message);
+          if (!hasStateRef.current) {
+            setError(err instanceof Error ? err.message : 'Failed to load game');
+          }
           setLoading(false);
         }
       }
     };
 
     fetchState();
-    const interval = setInterval(fetchState, 1000);
+    const intervalId = setInterval(fetchState, 1500);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      clearInterval(intervalId);
     };
-  }, [roomId, playerId, state]);
+  }, [roomId, playerId]);
+
+  const winnerId = state?.winnerId ?? null;
+  const myId = state?.you.id ?? null;
+
+  useEffect(() => {
+    if (!state || state.status !== 'finished') return;
+
+    if (winnerId && myId && winnerId === myId) {
+      playWin();
+      const duration = 3000;
+      const end = Date.now() + duration;
+
+      (function frame() {
+        confetti({
+          particleCount: 5,
+          angle: 60,
+          spread: 55,
+          origin: { x: 0 },
+          colors: ['#10b981', '#34d399', '#fbbf24'],
+        });
+        confetti({
+          particleCount: 5,
+          angle: 120,
+          spread: 55,
+          origin: { x: 1 },
+          colors: ['#10b981', '#34d399', '#fbbf24'],
+        });
+
+        if (Date.now() < end) {
+          requestAnimationFrame(frame);
+        }
+      })();
+    } else if (winnerId && myId && winnerId !== myId) {
+      playLose();
+    }
+  }, [state, winnerId, myId, playWin, playLose]);
 
   const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,15 +166,10 @@ export default function RoomClient({
       const res = await fetch('/api/rooms/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId,
-          name: joinName.trim(),
-          avatar: joinAvatar,
-        }),
+        body: JSON.stringify({ roomId, name: joinName.trim(), avatar: joinAvatar }),
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data?.error ?? 'Failed to join room');
       }
@@ -141,8 +180,7 @@ export default function RoomClient({
       const newUrl = `/room/${roomId}?playerId=${newPlayerId}`;
       window.history.replaceState({ ...window.history.state, as: newUrl, url: newUrl }, '', newUrl);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to join room';
-      setError(message);
+      setError(err instanceof Error ? err.message : 'Failed to join room');
     } finally {
       setIsJoining(false);
     }
@@ -171,8 +209,7 @@ export default function RoomClient({
 
       setState(data);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to lock secret';
-      setError(message);
+      setError(err instanceof Error ? err.message : 'Failed to lock secret');
     }
   };
 
@@ -200,8 +237,7 @@ export default function RoomClient({
       setGuessDigits(['', '', '', '']);
       setState(data);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to submit guess';
-      setError(message);
+      setError(err instanceof Error ? err.message : 'Failed to submit guess');
     }
   };
 
@@ -219,44 +255,6 @@ export default function RoomClient({
     router.push('/');
   };
 
-  const youWon = Boolean(
-    state && state.status === 'finished' && state.winnerId === state.you.id
-  );
-  const youLost = Boolean(
-    state && state.status === 'finished' && state.winnerId && state.winnerId !== state.you.id
-  );
-
-  useEffect(() => {
-    if (!youWon && !youLost) return;
-    if (youWon) {
-      playWin();
-      const duration = 3000;
-      const end = Date.now() + duration;
-      const frame = () => {
-        confetti({
-          particleCount: 5,
-          angle: 60,
-          spread: 55,
-          origin: { x: 0 },
-          colors: ['#10b981', '#34d399', '#fbbf24'],
-        });
-        confetti({
-          particleCount: 5,
-          angle: 120,
-          spread: 55,
-          origin: { x: 1 },
-          colors: ['#10b981', '#34d399', '#fbbf24'],
-        });
-        if (Date.now() < end) {
-          requestAnimationFrame(frame);
-        }
-      };
-      frame();
-    } else if (youLost) {
-      playLose();
-    }
-  }, [youWon, youLost, playWin, playLose]);
-
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950">
@@ -272,12 +270,8 @@ export default function RoomClient({
     return (
       <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
         <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-2xl backdrop-blur">
-          <h1 className="mb-2 text-center text-2xl font-bold text-slate-50">
-            Join Room {roomId}
-          </h1>
-          <p className="mb-6 text-center text-sm text-slate-400">
-            Enter your details to challenge your friend.
-          </p>
+          <h1 className="mb-2 text-center text-2xl font-bold text-slate-50">Join Room {roomId}</h1>
+          <p className="mb-6 text-center text-sm text-slate-400">Enter your details to challenge your friend.</p>
 
           <form onSubmit={handleJoinRoom} className="space-y-6">
             <div className="space-y-2">
@@ -299,9 +293,7 @@ export default function RoomClient({
             </div>
 
             {error && (
-              <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-                {error}
-              </p>
+              <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
             )}
 
             <button
@@ -334,9 +326,10 @@ export default function RoomClient({
 
   const { you, opponent, status } = state;
   const lastGuess = you.guesses[you.guesses.length - 1];
-  const everyoneReady =
-    opponent && you.ready && opponent.ready && status !== 'waitingForPlayers';
+  const everyoneReady = opponent && you.ready && opponent.ready && status !== 'waitingForPlayers';
   const gameFinished = status === 'finished';
+  const youWon = gameFinished && state.winnerId === you.id;
+  const youLost = gameFinished && state.winnerId && state.winnerId !== you.id;
   const timerSeed = you.guesses.length + (status === 'inProgress' ? 1 : 0);
 
   return (
@@ -344,13 +337,9 @@ export default function RoomClient({
       <div className="w-full max-w-xl rounded-3xl border border-slate-800 bg-slate-900/90 p-6 shadow-2xl backdrop-blur">
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-              Room Code
-            </p>
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">Room Code</p>
             <div className="flex items-center gap-2">
-              <span className="font-mono text-2xl font-bold text-white tracking-wider">
-                {state.roomId}
-              </span>
+              <span className="font-mono text-2xl font-bold text-white tracking-wider">{state.roomId}</span>
               <button
                 onClick={handleCopyLink}
                 className="group relative flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-400 transition hover:border-indigo-500 hover:text-indigo-400"
@@ -359,16 +348,7 @@ export default function RoomClient({
                 {copied ? (
                   <span className="text-emerald-400">✓</span>
                 ) : (
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                   </svg>
@@ -384,17 +364,13 @@ export default function RoomClient({
 
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/50 pl-1 pr-3 py-1">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500/20 text-sm">
-                {you.avatar}
-              </span>
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500/20 text-sm">{you.avatar}</span>
               <span className="text-xs font-bold text-indigo-100">{you.name} (You)</span>
             </div>
 
             {opponent ? (
               <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/50 pl-1 pr-3 py-1">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/20 text-sm">
-                  {opponent.avatar}
-                </span>
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/20 text-sm">{opponent.avatar}</span>
                 <span className="text-xs font-bold text-rose-100">{opponent.name}</span>
               </div>
             ) : (
@@ -406,37 +382,23 @@ export default function RoomClient({
         </div>
 
         <div className="mb-6 rounded-xl bg-slate-950/50 p-3 text-center text-sm">
-          {status === 'waitingForPlayers' && (
-            <span className="text-slate-400">Share the Room Code above to invite a friend!</span>
-          )}
-          {status === 'settingSecret' && !everyoneReady && (
-            <span className="text-indigo-300">Phase 1: Set your secret 4-digit code.</span>
-          )}
-          {status === 'inProgress' && (
-            <span className="font-semibold text-emerald-300">Phase 2: Crack the code!</span>
-          )}
-          {status === 'finished' && youWon && (
-            <span className="font-bold text-emerald-400">🎉 VICTORY! You guessed it correctly!</span>
-          )}
-          {status === 'finished' && youLost && (
-            <span className="font-bold text-rose-400">💀 DEFEAT! Your code was cracked.</span>
-          )}
+          {status === 'waitingForPlayers' && <span className="text-slate-400">Share the Room Code above to invite a friend!</span>}
+          {status === 'settingSecret' && !everyoneReady && <span className="text-indigo-300">Phase 1: Set your secret 4-digit code.</span>}
+          {status === 'inProgress' && <span className="font-semibold text-emerald-300">Phase 2: Crack the code!</span>}
+          {status === 'finished' && youWon && <span className="font-bold text-emerald-400">🎉 VICTORY! You guessed it correctly!</span>}
+          {status === 'finished' && youLost && <span className="font-bold text-rose-400">💀 DEFEAT! Your code was cracked.</span>}
         </div>
 
         {error && (
-          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-            {error}
-          </p>
+          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p>
         )}
 
         {status !== 'inProgress' && !gameFinished && (
           <div className="relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/50 p-6 text-center">
             {you.ready && (!opponent || !opponent.ready) && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm">
-                <p className="mb-2 font-semibold text-emerald-400">Secret Locked!</p>
-                <p className="text-xs text-slate-400 animate-pulse">
-                  Waiting for opponent to choose...
-                </p>
+                <p className="mb-2 text-emerald-400 font-semibold">Secret Locked!</p>
+                <p className="text-xs text-slate-400 animate-pulse">Waiting for opponent to choose...</p>
               </div>
             )}
 
@@ -456,30 +418,22 @@ export default function RoomClient({
           <div className="space-y-6">
             <div className="flex items-center justify-between px-1">
               <RoundTimer seed={timerSeed} />
-              <span className="text-xs font-medium text-slate-500">
-                TURN {you.guesses.length + 1}
-              </span>
+              <span className="text-xs font-medium text-slate-500">TURN {you.guesses.length + 1}</span>
             </div>
 
             <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4">
-              <p className="mb-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500">
-                Result
-              </p>
+              <p className="mb-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500">Result</p>
               {lastGuess ? (
                 <div className="flex flex-col items-center gap-2">
                   <DigitFeedbackRow feedback={lastGuess.feedback} value={lastGuess.value} />
                 </div>
               ) : (
-                <p className="py-2 text-center text-sm text-slate-500">
-                  Waiting for your first guess...
-                </p>
+                <p className="py-2 text-center text-sm text-slate-500">Waiting for your first guess...</p>
               )}
             </div>
 
             <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
-              <p className="mb-3 text-center text-xs font-bold uppercase tracking-wider text-indigo-300">
-                Enter Guess
-              </p>
+              <p className="mb-3 text-center text-xs font-bold uppercase tracking-wider text-indigo-300">Enter Guess</p>
               <DigitInput value={guessDigits} onChange={setGuessDigits} />
               <button
                 onClick={handleSubmitGuess}
@@ -491,15 +445,13 @@ export default function RoomClient({
 
             <div className="mt-4 border-t border-slate-800 pt-4">
               <p className="mb-3 text-xs font-semibold text-slate-500">HISTORY</p>
-              <div className="custom-scrollbar flex max-h-32 flex-col-reverse gap-2 overflow-y-auto pr-2">
+              <div className="flex max-h-32 flex-col-reverse gap-2 overflow-y-auto pr-2">
                 {you.guesses.map((g, i) => (
                   <div
                     key={`${g.createdAt}-${i}`}
                     className="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-xs"
                   >
-                    <span className="font-mono tracking-widest text-slate-300">
-                      {g.value}
-                    </span>
+                    <span className="font-mono tracking-widest text-slate-300">{g.value}</span>
                     <div className="flex gap-1">
                       {g.feedback.map((f, fi) => (
                         <div
@@ -522,7 +474,15 @@ export default function RoomClient({
         )}
 
         {gameFinished && (
-          <div className="mt-6">
+          <div className="mt-6 space-y-4">
+            {state.opponentSecret && (
+              <div className="rounded-2xl border border-indigo-500/40 bg-indigo-500/10 p-5 text-center text-slate-100">
+                <p className="text-xs uppercase tracking-[0.4em] text-indigo-300">Opponent Code</p>
+                <p className="mt-3 font-mono text-3xl font-bold tracking-[0.5em] text-slate-50">
+                  {state.opponentSecret.split('').join(' ')}
+                </p>
+              </div>
+            )}
             <button
               onClick={handleBackHome}
               className="w-full rounded-xl bg-slate-800 py-3 font-semibold text-white transition hover:bg-slate-700"
