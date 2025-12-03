@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { room, player } = createRoom(name.trim(), avatar);
+    const { room, player } = await createRoom(name.trim(), avatar);
 
     return NextResponse.json({
       roomId: room.id,

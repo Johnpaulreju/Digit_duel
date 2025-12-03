@@ -16,9 +16,12 @@ export async function POST(
       );
     }
 
-    makeGuess(roomId, playerId, guess);
+    await makeGuess(roomId, playerId, guess);
 
-    const room = getRoom(roomId)!;
+    const room = await getRoom(roomId);
+    if (!room) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    }
     const payload = serializeRoomForPlayer(room, playerId);
 
     return NextResponse.json(payload);

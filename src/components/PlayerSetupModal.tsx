@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Modal from './Modal';
 import AvatarPicker from './AvatarPicker';
@@ -9,17 +9,24 @@ interface PlayerSetupModalProps {
   mode: 'host' | 'join';
   open: boolean;
   onClose: () => void;
+  initialRoomId?: string;
 }
 
-export default function PlayerSetupModal({ mode, open, onClose }: PlayerSetupModalProps) {
+export default function PlayerSetupModal({ mode, open, onClose, initialRoomId }: PlayerSetupModalProps) {
   const router = useRouter();
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('🤖');
-  const [roomId, setRoomId] = useState('');
+  const [roomId, setRoomId] = useState(initialRoomId ?? '');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const isHost = mode === 'host';
+
+  useEffect(() => {
+    if (initialRoomId && open) {
+      setRoomId(initialRoomId);
+    }
+  }, [initialRoomId, open]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

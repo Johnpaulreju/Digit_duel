@@ -1,14 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import PlayerSetupModal from '@/components/PlayerSetupModal';
 
-export default function HomePage() {
-  const [mode, setMode] = useState<'host' | 'join' | null>(null);
+function HomePageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const joinParam = searchParams.get('join');
+  const [mode, setMode] = useState<'host' | 'join' | null>(() => (joinParam ? 'join' : null));
+  const [prefilledRoomId, setPrefilledRoomId] = useState<string | undefined>(() => joinParam ?? undefined);
+
+  useEffect(() => {
+    if (joinParam) {
+      router.replace('/', { scroll: false });
+    }
+  }, [joinParam, router]);
+
+  const handleCloseModal = () => {
+    setMode(null);
+    setPrefilledRoomId(undefined);
+  };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-xl backdrop-blur">
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4 py-8">
+      <div className="mx-auto w-full max-w-3xl rounded-3xl border border-slate-800 bg-slate-900/85 p-10 shadow-2xl backdrop-blur">
         <h1 className="mb-2 text-center text-3xl font-extrabold tracking-tight text-slate-50">
           Digit Duel
         </h1>
@@ -20,7 +36,10 @@ export default function HomePage() {
           <button
             className="w-full rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white
                        shadow-lg shadow-indigo-500/30 transition hover:bg-indigo-400"
-            onClick={() => setMode('host')}
+            onClick={() => {
+              setPrefilledRoomId(undefined);
+              setMode('host');
+            }}
           >
             Host game
           </button>
@@ -28,7 +47,10 @@ export default function HomePage() {
           <button
             className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm
                        font-semibold text-slate-100 transition hover:border-indigo-400 hover:bg-slate-800"
-            onClick={() => setMode('join')}
+            onClick={() => {
+              setPrefilledRoomId(undefined);
+              setMode('join');
+            }}
           >
             Join game
           </button>
@@ -44,9 +66,18 @@ export default function HomePage() {
         <PlayerSetupModal
           mode={mode}
           open={true}
-          onClose={() => setMode(null)}
+          initialRoomId={prefilledRoomId}
+          onClose={handleCloseModal}
         />
       )}
     </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={<main className="flex min-h-screen items-center justify-center bg-slate-950"><span className="text-slate-400">Loading…</span></main>}>
+      <HomePageContent />
+    </Suspense>
   );
 }

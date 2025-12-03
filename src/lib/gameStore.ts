@@ -1,21 +1,29 @@
+import { Redis } from '@upstash/redis';
 import { DigitFeedback, Guess, Player, Room, RoomStatus } from './gameTypes';
 
-type GlobalStore = {
-  digitDuelRooms?: Map<string, Room>;
-};
+const ROOM_TTL_SECONDS = 60 * 60; // 1 hour
+const ROOM_KEY_PREFIX = 'room:';
 
-const globalStore = globalThis as GlobalStore;
-const rooms = globalStore.digitDuelRooms ?? new Map<string, Room>();
-if (!globalStore.digitDuelRooms) {
-  globalStore.digitDuelRooms = rooms;
+const hasRedisCredentials =
+  typeof process !== 'undefined' &&
+  Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+
+const redis = hasRedisCredentials
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    })
+  : null;
+
+// Local fallback so devs without env vars can still play
+const memoryRooms = new Map<string, Room>();
+
+function roomKey(roomId: string) {
+  return `${ROOM_KEY_PREFIX}${roomId}`;
 }
 
 function generateRoomId(): string {
-  let id: string;
-  do {
-    id = Math.floor(10000 + Math.random() * 90000).toString(); // 5-digit room code
-  } while (rooms.has(id));
-  return id;
+  return Math.floor(10000 + Math.random() * 90000).toString();
 }
 
 function generatePlayerId(): string {
@@ -25,11 +33,26 @@ function generatePlayerId(): string {
   return Math.random().toString(36).slice(2);
 }
 
+async function saveRoom(room: Room) {
+  if (redis) {
+    await redis.set(roomKey(room.id), room, { ex: ROOM_TTL_SECONDS });
+  } else {
+    memoryRooms.set(room.id, room);
+  }
+}
+
+async function loadRoom(roomId: string): Promise<Room | null> {
+  if (redis) {
+    const room = await redis.get<Room>(roomKey(roomId));
+    return room ?? null;
+  }
+  return memoryRooms.get(roomId) ?? null;
+}
+
 export function evaluateGuess(secret: string, guess: string): DigitFeedback[] {
   const result: DigitFeedback[] = Array(4).fill('wrong');
   const usedSecret = [false, false, false, false];
 
-  // Mark correct digits first (green)
   for (let i = 0; i < 4; i++) {
     if (guess[i] === secret[i]) {
       result[i] = 'correct';
@@ -37,7 +60,6 @@ export function evaluateGuess(secret: string, guess: string): DigitFeedback[] {
     }
   }
 
-  // Mark misplaced digits (yellow)
   for (let i = 0; i < 4; i++) {
     if (result[i] === 'correct') continue;
     const digit = guess[i];
@@ -59,12 +81,14 @@ export function evaluateGuess(secret: string, guess: string): DigitFeedback[] {
   return result;
 }
 
-export function createRoom(name: string, avatar: string): { room: Room; player: Player } {
-  const roomId = generateRoomId();
-  const playerId = generatePlayerId();
+export async function createRoom(name: string, avatar: string): Promise<{ room: Room; player: Player }> {
+  let roomId = generateRoomId();
+  while (await loadRoom(roomId)) {
+    roomId = generateRoomId();
+  }
 
   const player: Player = {
-    id: playerId,
+    id: generatePlayerId(),
     name,
     avatar,
     ready: false,
@@ -78,17 +102,16 @@ export function createRoom(name: string, avatar: string): { room: Room; player: 
     createdAt: Date.now(),
   };
 
-  rooms.set(roomId, room);
-
+  await saveRoom(room);
   return { room, player };
 }
 
-export function joinRoom(
+export async function joinRoom(
   roomId: string,
   name: string,
   avatar: string
-): { room: Room; player: Player } {
-  const room = rooms.get(roomId);
+): Promise<{ room: Room; player: Player }> {
+  const room = await loadRoom(roomId);
 
   if (!room) {
     throw new Error('Room not found');
@@ -98,9 +121,8 @@ export function joinRoom(
     throw new Error('Room is full');
   }
 
-  const playerId = generatePlayerId();
   const player: Player = {
-    id: playerId,
+    id: generatePlayerId(),
     name,
     avatar,
     ready: false,
@@ -113,18 +135,19 @@ export function joinRoom(
     room.status = 'settingSecret';
   }
 
+  await saveRoom(room);
   return { room, player };
 }
 
-export function getRoom(roomId: string): Room | undefined {
-  return rooms.get(roomId);
+export async function getRoom(roomId: string): Promise<Room | null> {
+  return loadRoom(roomId);
 }
 
-export function setSecret(roomId: string, playerId: string, secret: string): Room {
-  const room = rooms.get(roomId);
+export async function setSecret(roomId: string, playerId: string, secret: string): Promise<Room> {
+  const room = await loadRoom(roomId);
   if (!room) throw new Error('Room not found');
 
-  if (!/^\d{4}$/.test(secret)) {
+  if (!/^[0-9]{4}$/.test(secret)) {
     throw new Error('Secret must be a 4 digit number');
   }
 
@@ -140,22 +163,23 @@ export function setSecret(roomId: string, playerId: string, secret: string): Roo
     room.status = 'settingSecret';
   }
 
+  await saveRoom(room);
   return room;
 }
 
-export function makeGuess(
+export async function makeGuess(
   roomId: string,
   playerId: string,
   guess: string
-): { room: Room; result: Guess; isWin: boolean } {
-  const room = rooms.get(roomId);
+): Promise<{ room: Room; result: Guess; isWin: boolean }> {
+  const room = await loadRoom(roomId);
   if (!room) throw new Error('Room not found');
 
   if (room.status !== 'inProgress') {
     throw new Error('Game not in progress');
   }
 
-  if (!/^\d{4}$/.test(guess)) {
+  if (!/^[0-9]{4}$/.test(guess)) {
     throw new Error('Guess must be a 4 digit number');
   }
 
@@ -183,10 +207,10 @@ export function makeGuess(
     room.winnerId = player.id;
   }
 
+  await saveRoom(room);
   return { room, result: guessObj, isWin };
 }
 
-// Filter out secrets so we don't leak them to the client
 export function serializeRoomForPlayer(room: Room, playerId: string) {
   const you = room.players.find((p) => p.id === playerId);
   if (!you) throw new Error('You are not in this room');
